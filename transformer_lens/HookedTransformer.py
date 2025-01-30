@@ -258,6 +258,7 @@ class HookedTransformer(HookedRootModule):
     def input_to_embed(
         self,
         input: Union[str, List[str], Int[torch.Tensor, "batch pos"]],
+        image_embeds: Optional[torch.Tensor] = None,
         prepend_bos: Optional[Union[bool, None]] = USE_DEFAULT_VALUE,
         padding_side: Optional[Union[Literal["left", "right"], None]] = USE_DEFAULT_VALUE,
         attention_mask: Optional[torch.Tensor] = None,
@@ -272,6 +273,7 @@ class HookedTransformer(HookedRootModule):
 
         Args:
             input (Union[str, List[str], Int[torch.Tensor, "batch pos"]]): The input to the model.
+            image_embeds (torch.Tensor): Image embeddings for multimodal models (currently only supported LLaVa).
             prepend_bos (bool, optional): Overrides self.cfg.default_prepend_bos. Whether to prepend
                 the BOS token to the input (only applies when input is a string). Defaults to None,
                 implying usage of self.cfg.default_prepend_bos which is set to True unless specified
@@ -291,6 +293,7 @@ class HookedTransformer(HookedRootModule):
             tokens = self.to_tokens(input, prepend_bos=prepend_bos, padding_side=padding_side)
         else:
             tokens = input
+        image_mask = tokens == 32000
         if len(tokens.shape) == 1:
             # If tokens are a rank 1 tensor, add a dummy batch dimension to avoid things breaking.
             tokens = tokens[None]
@@ -350,7 +353,13 @@ class HookedTransformer(HookedRootModule):
             pos_offset = cache_ctx_length
         if self.cfg.use_hook_tokens:
             tokens = self.hook_tokens(tokens)
-        embed = self.hook_embed(self.embed(tokens))  # [batch, pos, d_model]
+        if image_embeds is not None:
+            # Insert image embeddings
+            embed = self.embed(tokens)
+            embed[image_mask] = image_embeds.reshape(-1, image_embeds.shape[-1])
+            embed = self.hook_embed(embed)
+        else:
+            embed = self.hook_embed(self.embed(tokens))  # [batch, pos, d_model]
         if self.cfg.positional_embedding_type == "standard":
             pos_embed = self.hook_pos_embed(
                 self.pos_embed(tokens, pos_offset, attention_mask)
@@ -385,6 +394,7 @@ class HookedTransformer(HookedRootModule):
         self,
         input,
         return_type: Literal["logits"],
+        image_embeds: Optional[torch.Tensor] = None,
         loss_per_token: bool = False,
         prepend_bos: Optional[Union[bool, None]] = USE_DEFAULT_VALUE,
         padding_side: Optional[Union[Literal["left", "right"], None]] = USE_DEFAULT_VALUE,
@@ -402,6 +412,7 @@ class HookedTransformer(HookedRootModule):
         self,
         input,
         return_type: Literal["loss"],
+        image_embeds: Optional[torch.Tensor] = None,
         loss_per_token: bool = False,
         prepend_bos: Optional[Union[bool, None]] = USE_DEFAULT_VALUE,
         padding_side: Optional[Union[Literal["left", "right"], None]] = USE_DEFAULT_VALUE,
@@ -419,6 +430,7 @@ class HookedTransformer(HookedRootModule):
         self,
         input,
         return_type: Literal["both"],
+        image_embeds: Optional[torch.Tensor] = None,
         loss_per_token: bool = False,
         prepend_bos: Optional[Union[bool, None]] = USE_DEFAULT_VALUE,
         padding_side: Optional[Union[Literal["left", "right"], None]] = USE_DEFAULT_VALUE,
@@ -436,6 +448,7 @@ class HookedTransformer(HookedRootModule):
         self,
         input,
         return_type: Literal[None],
+        image_embeds: Optional[torch.Tensor] = None,
         loss_per_token: bool = False,
         prepend_bos: Optional[Union[bool, None]] = USE_DEFAULT_VALUE,
         padding_side: Optional[Union[Literal["left", "right"], None]] = USE_DEFAULT_VALUE,
@@ -457,6 +470,7 @@ class HookedTransformer(HookedRootModule):
             Float[torch.Tensor, "batch pos d_model"],
         ],
         return_type: Optional[str] = "logits",
+        image_embeds: Optional[torch.Tensor] = None,
         loss_per_token: bool = False,
         prepend_bos: Optional[Union[bool, None]] = USE_DEFAULT_VALUE,
         padding_side: Optional[Literal["left", "right"]] = USE_DEFAULT_VALUE,
@@ -486,6 +500,7 @@ class HookedTransformer(HookedRootModule):
             return_type Optional[str]: The type of output to return. Can be one of: None (return
                 nothing, don't calculate logits), 'logits' (return logits), 'loss' (return
                 cross-entropy loss), 'both' (return logits and loss).
+            image_embeds (torch.Tensor): Image embeddings for multimodal models (currently only supported LLaVa).
             loss_per_token bool: Whether to return the (next token prediction) loss per token (True)
                 or average (False). Average loss is a scalar (averaged over position *and* batch),
                 per-token loss is a tensor ([batch, position-1]) - position-1 because we're
@@ -545,6 +560,7 @@ class HookedTransformer(HookedRootModule):
                     attention_mask,
                 ) = self.input_to_embed(
                     input,
+                    image_embeds=image_embeds,
                     prepend_bos=prepend_bos,
                     padding_side=padding_side,
                     attention_mask=attention_mask,
@@ -714,6 +730,7 @@ class HookedTransformer(HookedRootModule):
     def to_tokens(
         self,
         input: Union[str, List[str]],
+        image_embeds: Optional[torch.Tensor] = None,
         prepend_bos: Optional[Union[bool, None]] = USE_DEFAULT_VALUE,
         padding_side: Optional[Union[Literal["left", "right"], None]] = USE_DEFAULT_VALUE,
         move_to_device: bool = True,
@@ -736,6 +753,7 @@ class HookedTransformer(HookedRootModule):
 
         Args:
             input (Union[str, List[str]]): The input to tokenize.
+            image_embeds (torch.Tensor): Image embeddings for multimodal models (currently only supported LLaVa).
             prepend_bos (bool, optional): Overrides self.cfg.default_prepend_bos. Whether to prepend
                 the BOS token to the input (only applies when input is a string). Defaults to None,
                 implying usage of self.cfg.default_prepend_bos which is set to True unless specified
@@ -759,14 +777,20 @@ class HookedTransformer(HookedRootModule):
             if self.cfg.default_prepend_bos and not self.cfg.tokenizer_prepends_bos:
                 # We want to prepend bos but the tokenizer doesn't automatically do it, so we add it manually
                 input = utils.get_input_with_manually_prepended_bos(self.tokenizer, input)
-
-            tokens = self.tokenizer(
-                input,
-                return_tensors="pt",
-                padding=True,
-                truncation=truncate,
-                max_length=self.cfg.n_ctx if truncate else None,
-            )["input_ids"]
+                
+            if image_embeds is not None:
+                # Expanding the space for image tokens
+                tokens = self.tokenizer.encode("USER: <image>\n"+input+" ASSISTANT:")
+                i = tokens.index(32000)
+                tokens = torch.LongTensor(tokens[:i] + [32000] * 576 + tokens[i + 1:])[None,:]
+            else:
+                tokens = self.tokenizer(
+                    input,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=truncate,
+                    max_length=self.cfg.n_ctx if truncate else None,
+                )["input_ids"]
 
             if not self.cfg.default_prepend_bos and self.cfg.tokenizer_prepends_bos:
                 # We don't want to prepend bos but the tokenizer does it automatically, so we remove it manually
@@ -2031,6 +2055,7 @@ class HookedTransformer(HookedRootModule):
     def generate(
         self,
         input: Union[str, Float[torch.Tensor, "batch pos"]] = "",
+        image_embeds: Optional[torch.Tensor] = None,
         max_new_tokens: int = 10,
         stop_at_eos: bool = True,
         eos_token_id: Optional[int] = None,
@@ -2061,6 +2086,7 @@ class HookedTransformer(HookedRootModule):
             input (Union[str, Int[torch.Tensor, "batch pos"])]): Either a batch of tokens ([batch,
                 pos]) or a text string (this will be converted to a batch of tokens with batch size
                 1).
+            image_embeds (torch.Tensor): Image embeddings for multimodal models (currently only supported LLaVa).
             max_new_tokens (int): Maximum number of tokens to generate.
             stop_at_eos (bool): If True, stop generating tokens when the model outputs eos_token.
             eos_token_id (Optional[Union[int, Sequence]]): The token ID to use for end
@@ -2103,7 +2129,7 @@ class HookedTransformer(HookedRootModule):
                 assert (
                     self.tokenizer is not None
                 ), "Must provide a tokenizer if passing a string to the model"
-                tokens = self.to_tokens(input, prepend_bos=prepend_bos, padding_side=padding_side)
+                tokens = self.to_tokens(input, image_embeds=image_embeds, prepend_bos=prepend_bos, padding_side=padding_side)
             else:
                 tokens = input
 
@@ -2164,6 +2190,7 @@ class HookedTransformer(HookedRootModule):
                         logits = self.forward(
                             tokens[:, -1:],
                             return_type="logits",
+                            image_embeds=image_embeds,
                             prepend_bos=prepend_bos,
                             padding_side=padding_side,
                             past_kv_cache=past_kv_cache,
@@ -2172,6 +2199,7 @@ class HookedTransformer(HookedRootModule):
                         logits = self.forward(
                             tokens,
                             return_type="logits",
+                            image_embeds=image_embeds,
                             prepend_bos=prepend_bos,
                             padding_side=padding_side,
                             past_kv_cache=past_kv_cache,
