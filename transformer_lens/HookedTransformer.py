@@ -2241,7 +2241,10 @@ class HookedTransformer(HookedRootModule):
                         )
                     )
 
-                tokens = torch.cat([tokens, sampled_tokens.unsqueeze(-1)], dim=-1)
+                if image_embeds is not None:
+                    tokens = sampled_tokens
+                else:
+                    tokens = torch.cat([tokens, sampled_tokens.unsqueeze(-1)], dim=-1)
 
                 if stop_at_eos and finished_sequences.all():
                     break
