@@ -353,7 +353,7 @@ class HookedTransformer(HookedRootModule):
             pos_offset = cache_ctx_length
         if self.cfg.use_hook_tokens:
             tokens = self.hook_tokens(tokens)
-        if image_embeds is not None:
+        if (image_embeds is not None) and (image_mask.sum().item() != 0):
             # Insert image embeddings
             embed = self.embed(tokens)
             embed[image_mask] = image_embeds.reshape(-1, image_embeds.shape[-1])
