@@ -2210,6 +2210,7 @@ class HookedTransformer(HookedRootModule):
                     logits = self.forward(
                         tokens,
                         return_type="logits",
+                        image_embeds=image_embeds,
                         prepend_bos=prepend_bos,
                         padding_side=padding_side,
                     )
@@ -2241,10 +2242,7 @@ class HookedTransformer(HookedRootModule):
                         )
                     )
 
-                if image_embeds is not None:
-                    tokens = sampled_tokens
-                else:
-                    tokens = torch.cat([tokens, sampled_tokens.unsqueeze(-1)], dim=-1)
+                tokens = torch.cat([tokens, sampled_tokens.unsqueeze(-1)], dim=-1)
 
                 if stop_at_eos and finished_sequences.all():
                     break
@@ -2252,9 +2250,9 @@ class HookedTransformer(HookedRootModule):
             if return_type == "str":
                 if self.cfg.default_prepend_bos:
                     # If we prepended a BOS token, remove it when returning output.
-                    return self.tokenizer.decode(tokens[0, 1:])
+                    return self.tokenizer.decode(tokens[0, 1:])[4088:]
                 else:
-                    return self.tokenizer.decode(tokens[0])
+                    return self.tokenizer.decode(tokens[0])[4088:]
 
             else:
                 return tokens
