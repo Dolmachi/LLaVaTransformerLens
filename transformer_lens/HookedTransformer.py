@@ -2250,9 +2250,9 @@ class HookedTransformer(HookedRootModule):
             if return_type == "str":
                 if self.cfg.default_prepend_bos:
                     # If we prepended a BOS token, remove it when returning output.
-                    return self.tokenizer.decode(tokens[0, 1:])[4088:]
+                    return self.tokenizer.decode(tokens[0, 1:]).split("ASSISTANT: ")[1]
                 else:
-                    return self.tokenizer.decode(tokens[0])[4088:]
+                    return self.tokenizer.decode(tokens[0]).split("ASSISTANT: ")[1]
 
             else:
                 return tokens
